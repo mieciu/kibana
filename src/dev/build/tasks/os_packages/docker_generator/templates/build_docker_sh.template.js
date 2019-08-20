@@ -26,14 +26,14 @@ function generator({ imageTag, imageFlavor, versionTag, dockerOutputDir }) {
   # ** THIS IS AN AUTO-GENERATED FILE **
   #
   set -euo pipefail
-  
-  docker pull centos:7
-  
+
+  docker pull centos:7.6.1810@sha256:6ae4cddb2b37f889afd576a17a5286b311dcbf10a904409670827f6f9b50065e
+
   echo "Building: kibana${ imageFlavor }-docker"; \\
   docker build -t ${ imageTag }${ imageFlavor }:${ versionTag } -f Dockerfile . || exit 1;
 
   docker save ${ imageTag }${ imageFlavor }:${ versionTag } | gzip -c > ${ dockerOutputDir }
-  
+
   exit 0
   `);
 }

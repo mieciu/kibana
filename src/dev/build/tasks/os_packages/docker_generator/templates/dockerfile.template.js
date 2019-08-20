@@ -37,7 +37,7 @@ function generator({ artifactTarball, versionTag, license, usePublicArtifact  })
   # Build stage 0
   # Extract Kibana and make various file manipulations.
   ################################################################################
-  FROM centos:7 AS prep_files
+  FROM centos:7.6.1810@sha256:6ae4cddb2b37f889afd576a17a5286b311dcbf10a904409670827f6f9b50065e AS prep_files
   ${copyArtifactTarballInsideDockerOptFolder()}
   RUN mkdir /usr/share/kibana
   WORKDIR /usr/share/kibana
@@ -53,11 +53,14 @@ function generator({ artifactTarball, versionTag, license, usePublicArtifact  })
   # Build stage 1
   # Copy prepared files from the previous stage and complete the image.
   ################################################################################
-  FROM centos:7
+  FROM centos:7.6.1810@sha256:6ae4cddb2b37f889afd576a17a5286b311dcbf10a904409670827f6f9b50065e
   EXPOSE 5601
 
   # Add Reporting dependencies.
-  RUN yum update -y && yum install -y fontconfig freetype && yum clean all
+  RUN yum update -y && \\
+      yum install -y fontconfig freetype wget unzip bzip2 epel-release
+  RUN yum -y install moreutils
+  RUN yum clean all
 
   # Add an init process, check the checksum to make sure it's a match
   RUN curl -L -o /usr/local/bin/dumb-init https://github.com/Yelp/dumb-init/releases/download/v1.2.2/dumb-init_1.2.2_amd64
@@ -68,10 +71,34 @@ function generator({ artifactTarball, versionTag, license, usePublicArtifact  })
   # Bring in Kibana from the initial stage.
   COPY --from=prep_files --chown=1000:0 /usr/share/kibana /usr/share/kibana
   WORKDIR /usr/share/kibana
+  RUN mkdir -p /app /data
   RUN ln -s /usr/share/kibana /opt/kibana
 
   ENV ELASTIC_CONTAINER true
-  ENV PATH=/usr/share/kibana/bin:$PATH
+  ENV KIBANA_HOME /usr/share/kibana
+  ENV PATH=$KIBANA_HOME:$PATH
+
+  # By default Kibana would use KIBANA_HOME as BABEL_CACHE_PATH
+  ENV BABEL_CACHE_PATH /tmp/babel.json
+
+  # Unpack chromium at image build time, rather than waiting until container run time
+  RUN unzip $(find \${KIBANA_HOME} -type d -name .chromium)/chromium-*-linux.zip -d \${KIBANA_HOME}/data
+
+  # Remove the chromium directory, it's not needed at runtime (saves ~50MB)
+  RUN find \${KIBANA_HOME} -type d -name ".chromium" -exec rm -rf {} \\; -prune
+
+  # Force kibana to reoptimize
+  #
+  # This will start kibana and wait until it spits out a message saying
+  # it cannot talk to elasticsearch, because its not running locally.
+  # Kibana then will die peacefully with exit 0. Remove the resulting
+  # uuid, so we don't assign a uuid at image creation time (that needs
+  # to happen at runtime).
+  RUN echo -e "\\nxpack.license_management.enabled: false\\n" >> \${KIBANA_HOME}/config/kibana.yml
+  RUN \${KIBANA_HOME}/bin/kibana --allow-root 2>&1 | grep -m1 'No living connections' > /dev/null && rm -f \${KIBANA_HOME}/data/uuid
+
+  # Remove the suid bit everywhere it is set to mitigate stackclash
+  RUN find / -xdev -perm -4000 -exec chmod u-s {} +
 
   # Set some Kibana configuration defaults.
   COPY --chown=1000:0 config/kibana.yml /usr/share/kibana/config/kibana.yml
